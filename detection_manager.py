@@ -24,6 +24,10 @@ FACE_MODEL_CANDIDATES = [
     "face_yolov8s.pt",
 ]
 
+HEAD_MODEL_CANDIDATES = [
+    "head_yolov8n.pt",
+]
+
 BODY_MODEL_CANDIDATES = [
     "person_yolov8m-seg.pt",
     "person_yolov8n-seg.pt",
@@ -33,12 +37,16 @@ BODY_MODEL_CANDIDATES = [
 # 默认下载源（优先国内镜像）
 HF_BASE_MIRROR = "https://hf-mirror.com/ashllay/YOLO_Models/resolve/main/"
 HF_BASE_OFFICIAL = "https://huggingface.co/ashllay/YOLO_Models/resolve/main/"
+# 头部模型下载源
+HEAD_HF_MIRROR = "https://hf-mirror.com/jadechip/head_yolov8n.pt/resolve/main/"
+HEAD_HF_OFFICIAL = "https://huggingface.co/jadechip/head_yolov8n.pt/resolve/main/"
 ENABLE_REMOTE_SIZE = False
 SIZE_HINTS = {
     "face_yolov8m.pt": 50 * 1024 * 1024,
     "face_yolov8n.pt": 10 * 1024 * 1024,
     "face_yolov8n_v2.pt": 12 * 1024 * 1024,
     "face_yolov8s.pt": 20 * 1024 * 1024,
+    "head_yolov8n.pt": 10 * 1024 * 1024,
     "person_yolov8m-seg.pt": 50 * 1024 * 1024,
     "person_yolov8n-seg.pt": 20 * 1024 * 1024,
     "person_yolov8s-seg.pt": 30 * 1024 * 1024,
@@ -67,14 +75,19 @@ class DetectionManager:
         """
         self.comfyui_root = comfyui_root or self._find_comfyui_root()
         self.face_model = None
+        self.head_model = None
         self.body_model = None
         self.face_model_filename = "face_yolov8m.pt"
+        self.head_model_filename = "head_yolov8n.pt"
         self.body_model_filename = "person_yolov8m-seg.pt"
         self._device = "cpu"
         
         # 解析模型路径
         self.face_model_path = self._resolve_model_path(
             f"models/ultralytics/bbox/{self.face_model_filename}"
+        )
+        self.head_model_path = self._resolve_model_path(
+            f"models/ultralytics/bbox/{self.head_model_filename}"
         )
         self.body_model_path = self._resolve_model_path(
             f"models/ultralytics/segm/{self.body_model_filename}"
@@ -124,15 +137,18 @@ class DetectionManager:
         """
         return os.path.join(self.comfyui_root, relative_path)
     
-    def set_selected_models(self, face_filename: Optional[str] = None, body_filename: Optional[str] = None):
+    def set_selected_models(self, face_filename: Optional[str] = None, head_filename: Optional[str] = None, body_filename: Optional[str] = None):
         """
-        设置待加载的人脸和人体模型文件名，并更新目标路径。
+        设置待加载的人脸、头部和人体模型文件名，并更新目标路径。
         """
         if face_filename:
             self.face_model_filename = face_filename
+        if head_filename:
+            self.head_model_filename = head_filename
         if body_filename:
             self.body_model_filename = body_filename
         self.face_model_path = self._resolve_model_path(f"models/ultralytics/bbox/{self.face_model_filename}")
+        self.head_model_path = self._resolve_model_path(f"models/ultralytics/bbox/{self.head_model_filename}")
         self.body_model_path = self._resolve_model_path(f"models/ultralytics/segm/{self.body_model_filename}")
 
     def _download_model_dynamic(self, filename: str, target_path: str, model_type: str) -> bool:
@@ -143,7 +159,7 @@ class DetectionManager:
         参数:
             filename: 要下载的文件名
             target_path: 本地保存路径
-            model_type: 模型类型 ("face" 或 "body")，用于日志
+            model_type: 模型类型 ("face"、"head" 或 "body")，用于日志
             
         返回:
             下载成功返回 True，否则返回 False
@@ -152,16 +168,20 @@ class DetectionManager:
         model_dir = os.path.dirname(target_path)
         os.makedirs(model_dir, exist_ok=True)
         
-        # 构造候选远程路径（有的仓库可能放在根或子目录）
-        candidate_remote_paths = [
-            filename,
-            f"bbox/{filename}",
-            f"segm/{filename}",
-        ]
-        urls = []
-        for p in candidate_remote_paths:
-            urls.append(HF_BASE_MIRROR + p)
-            urls.append(HF_BASE_OFFICIAL + p)
+        # 根据模型类型选择下载源
+        if model_type == "head":
+            urls = [HEAD_HF_MIRROR + filename, HEAD_HF_OFFICIAL + filename]
+        else:
+            # 构造候选远程路径（有的仓库可能放在根或子目录）
+            candidate_remote_paths = [
+                filename,
+                f"bbox/{filename}",
+                f"segm/{filename}",
+            ]
+            urls = []
+            for p in candidate_remote_paths:
+                urls.append(HF_BASE_MIRROR + p)
+                urls.append(HF_BASE_OFFICIAL + p)
         
         for url in urls:
             source_name = "hf-mirror.com" if "hf-mirror.com" in url else "huggingface.co"
@@ -208,7 +228,7 @@ class DetectionManager:
     
     def load_models(self) -> bool:
         """
-        加载人脸和人体检测模型。
+        加载人脸、头部和人体检测模型。
         
         返回:
             如果模型加载成功返回 True，否则返回 False
@@ -240,6 +260,18 @@ class DetectionManager:
                     logger.error(error_msg)
                     raise ModelLoadError(self.face_model_path, "下载失败")
             
+            # 检查并下载头部模型
+            if not os.path.exists(self.head_model_path):
+                logger.info(f"头部检测模型未找到: {self.head_model_path}")
+                logger.info("尝试自动下载模型...")
+                if not self._download_model_dynamic(self.head_model_filename, self.head_model_path, "head"):
+                    error_msg = (
+                        f"头部检测模型下载失败。\n"
+                        f"请手动下载模型并放置到: {self.head_model_path}"
+                    )
+                    logger.error(error_msg)
+                    raise ModelLoadError(self.head_model_path, "下载失败")
+            
             # 检查并下载身体模型
             if not os.path.exists(self.body_model_path):
                 logger.info(f"身体检测模型未找到: {self.body_model_path}")
@@ -261,6 +293,16 @@ class DetectionManager:
                 error_msg = f"Failed to load face model: {str(e)}"
                 logger.error(error_msg)
                 raise ModelLoadError(self.face_model_path, error_msg)
+            
+            # 加载头部检测模型
+            try:
+                logger.info(f"Loading head detection model from: {self.head_model_path}")
+                self.head_model = YOLO(self.head_model_path)
+                logger.info("Head detection model loaded successfully")
+            except Exception as e:
+                error_msg = f"Failed to load head model: {str(e)}"
+                logger.error(error_msg)
+                raise ModelLoadError(self.head_model_path, error_msg)
             
             # 加载人体分割模型
             try:
@@ -338,6 +380,20 @@ class DetectionManager:
             options.append(label)
         return options
 
+    def list_head_model_options(self) -> List[str]:
+        options = []
+        for name in HEAD_MODEL_CANDIDATES:
+            path = self._resolve_model_path(f"models/ultralytics/bbox/{name}")
+            size = self._get_local_file_size(path)
+            if size is None:
+                size = SIZE_HINTS.get(name)
+            label = name
+            size_str = self._format_size(size)
+            if size_str:
+                label = f"{name} ({size_str})"
+            options.append(label)
+        return options
+
     def list_body_model_options(self) -> List[str]:
         options = []
         for name in BODY_MODEL_CANDIDATES:
@@ -356,6 +412,8 @@ class DetectionManager:
         try:
             if self.face_model is not None and hasattr(self.face_model, "model"):
                 self.face_model.model.to("cpu")
+            if self.head_model is not None and hasattr(self.head_model, "model"):
+                self.head_model.model.to("cpu")
             if self.body_model is not None and hasattr(self.body_model, "model"):
                 self.body_model.model.to("cpu")
             if torch.cuda.is_available():
@@ -392,6 +450,7 @@ class DetectionManager:
     
     def prepare_for_inference(self):
         self._ensure_model_device(self.face_model, self._device)
+        self._ensure_model_device(self.head_model, self._device)
         self._ensure_model_device(self.body_model, self._device)
     
     def detect_faces(self, image: np.ndarray) -> List[BoundingBox]:
@@ -522,6 +581,67 @@ class DetectionManager:
             
         except Exception as e:
             error_msg = f"Error during body detection: {str(e)}"
+            logger.error(error_msg)
+            # 返回空列表而不是抛出异常，以实现优雅降级
+            return []
+    
+    def detect_heads(self, image: np.ndarray) -> List[BoundingBox]:
+        """
+        在输入图像上运行头部检测模型。
+        
+        参数:
+            image: 输入图像，numpy 数组格式 (H, W, C)，值范围 [0, 255]
+            
+        返回:
+            检测到的头部边界框列表
+            
+        异常:
+            RuntimeError: 当模型未加载时抛出
+        """
+        if self.head_model is None:
+            error_msg = "Head detection model not loaded. Call load_models() first."
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
+        
+        try:
+            self._ensure_model_device(self.head_model, self._device)
+            with torch.no_grad():
+                results = self.head_model(image, verbose=False, device=self._device)
+            
+            # 转换结果为 BoundingBox 列表
+            head_boxes = []
+            
+            if len(results) > 0:
+                result = results[0]  # 获取第一个结果（单张图像）
+                
+                # 检查是否有检测结果
+                if result.boxes is not None and len(result.boxes) > 0:
+                    boxes = result.boxes
+                    
+                    # 遍历每个检测框
+                    for box in boxes:
+                        # 获取边界框坐标 (x1, y1, x2, y2)
+                        xyxy = box.xyxy[0].cpu().numpy()
+                        x1, y1, x2, y2 = map(int, xyxy)
+                        
+                        # 获取置信度
+                        confidence = float(box.conf[0].cpu().numpy())
+                        
+                        # 创建 BoundingBox 对象
+                        head_box = BoundingBox(
+                            x1=x1,
+                            y1=y1,
+                            x2=x2,
+                            y2=y2,
+                            confidence=confidence
+                        )
+                        head_boxes.append(head_box)
+            
+            logger.info(f"Detected {len(head_boxes)} head(s)")
+            return head_boxes
+            
+        except Exception as e:
+            error_msg = f"Error during head detection: {str(e)}"
             logger.error(error_msg)
             # 返回空列表而不是抛出异常，以实现优雅降级
             return []
