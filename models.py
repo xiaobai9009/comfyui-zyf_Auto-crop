@@ -160,38 +160,71 @@ class DetectionResult:
         获取主要人脸（按面积排序）。
         
         参数:
-            index: 人脸索引，默认为 0（最大的人脸）
-            
+            index: 人脸索引。
+                - 0: 所有人物的合成边界框（包含所有人脸的范围中心），用于尽可能展现图片中的所有人
+                - 1: 面积最大的人脸
+                - 2: 面积第二大的人脸
+                - 以此类推
+                
         返回:
             指定索引的人脸边界框，如果没有人脸则返回 None
         """
         if not self.faces:
             return None
+        if index == 0:
+            # 索引0：返回包含所有检测到的人脸的合成边界框（中心为所有框的几何中心）
+            x1 = min(f.x1 for f in self.faces)
+            y1 = min(f.y1 for f in self.faces)
+            x2 = max(f.x2 for f in self.faces)
+            y2 = max(f.y2 for f in self.faces)
+            avg_conf = sum(f.confidence for f in self.faces) / len(self.faces)
+            return BoundingBox(x1=x1, y1=y1, x2=x2, y2=y2, confidence=avg_conf)
         sorted_faces = sorted(self.faces, key=lambda f: f.area, reverse=True)
-        return sorted_faces[min(index, len(sorted_faces) - 1)]
+        actual_index = index - 1  # 因为0是合成框
+        return sorted_faces[min(actual_index, len(sorted_faces) - 1)]
 
-    def get_primary_body(self) -> Optional[BoundingBox]:
+    def get_primary_body(self, index: int = 0) -> Optional[BoundingBox]:
         """
         获取主要人体（按面积排序）。
         
+        参数:
+            index: 人体索引。
+                - 0: 所有人物的合成边界框（包含所有人体的范围），用于尽可能展现图片中的所有人
+                - 1: 面积最大的人体
+                - 2: 面积第二大的人体
+                - 以此类推
+                
         返回:
-            最大的人体边界框，如果没有人体则返回 None
+            指定索引的人体边界框，如果没有人体则返回 None
         """
         if not self.bodies:
             return None
-        return max(self.bodies, key=lambda b: b.area)
+        if index == 0:
+            # 索引0：返回包含所有检测到的人体的合成边界框
+            x1 = min(b.x1 for b in self.bodies)
+            y1 = min(b.y1 for b in self.bodies)
+            x2 = max(b.x2 for b in self.bodies)
+            y2 = max(b.y2 for b in self.bodies)
+            avg_conf = sum(b.confidence for b in self.bodies) / len(self.bodies)
+            return BoundingBox(x1=x1, y1=y1, x2=x2, y2=y2, confidence=avg_conf)
+        sorted_bodies = sorted(self.bodies, key=lambda b: b.area, reverse=True)
+        actual_index = index - 1
+        return sorted_bodies[min(actual_index, len(sorted_bodies) - 1)]
 
     def is_closeup_shot(self, image_area: int) -> bool:
         """
-        判断是否为特写镜头（人脸占比超过50%）。
+        判断是否为特写镜头（最大人脸占比超过50%）。
         
         参数:
             image_area: 图像总面积
             
         返回:
-            如果人脸面积超过图像面积的 50% 则返回 True
+            如果最大人脸面积超过图像面积的 50% 则返回 True
         """
-        face = self.get_primary_face()
+        if not self.faces:
+            return False
+        # 特写镜头判断使用最大人脸（索引 1，因为 0 是合成框）
+        face = self.get_primary_face(1)
         if face is None:
             return False
         return face.area > image_area * 0.5
